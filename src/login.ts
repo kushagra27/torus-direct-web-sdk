@@ -21,8 +21,19 @@ import {
   TorusVerifierResponse,
 } from "./handlers/interfaces";
 import { registerServiceWorker } from "./registerServiceWorker";
-import { AGGREGATE_VERIFIER, CONTRACT_MAP, ETHEREUM_NETWORK, LOGIN_TYPE, TORUS_METHOD, TORUS_NETWORK, UX_MODE, UX_MODE_TYPE } from "./utils/enums";
-import { clearLocalStorage, handleRedirectParameters, padUrlString, retrieveLoginDetails, storeLoginDetails } from "./utils/helpers";
+import {
+  AGGREGATE_VERIFIER,
+  CONTRACT_MAP,
+  ETHEREUM_NETWORK,
+  LOGIN_TYPE,
+  REDIRECT_PARAMS_STORAGE_METHOD,
+  REDIRECT_PARAMS_STORAGE_METHOD_TYPE,
+  TORUS_METHOD,
+  TORUS_NETWORK,
+  UX_MODE,
+  UX_MODE_TYPE,
+} from "./utils/enums";
+import { clearLoginDetailsStorage, handleRedirectParameters, padUrlString, retrieveLoginDetails, storeLoginDetails } from "./utils/helpers";
 import log from "./utils/loglevel";
 
 class DirectWebSDK {
@@ -33,6 +44,7 @@ class DirectWebSDK {
     redirectToOpener: boolean;
     redirect_uri: string;
     uxMode: UX_MODE_TYPE;
+    redirectParamsStorageMethod: REDIRECT_PARAMS_STORAGE_METHOD_TYPE;
   };
 
   torus: Torus;
@@ -47,7 +59,8 @@ class DirectWebSDK {
     redirectToOpener = false,
     redirectPathName = "redirect",
     apiKey = "torus-default",
-    uxMode = "popup",
+    uxMode = UX_MODE.POPUP,
+    redirectParamsStorageMethod = REDIRECT_PARAMS_STORAGE_METHOD.SESSION_STORAGE,
   }: DirectWebSDKArgs) {
     this.isInitialized = false;
     const baseUri = new URL(baseUrl);
@@ -58,6 +71,7 @@ class DirectWebSDK {
       },
       redirectToOpener,
       uxMode,
+      redirectParamsStorageMethod,
     };
     const torus = new Torus({
       enableLogging,
@@ -98,12 +112,37 @@ class DirectWebSDK {
   }
 
   private async handleRedirectCheck(): Promise<void> {
-    const response2 = await fetch(this.config.redirect_uri, { cache: "reload" });
-    if (response2.ok) {
-      this.isInitialized = true;
-      return;
-    }
-    throw new Error(`Please serve redirect.html present in serviceworker folder of this package on ${this.config.redirect_uri}`);
+    if (!document) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const redirectHtml = document.createElement("link");
+      redirectHtml.href = this.config.redirect_uri;
+      redirectHtml.crossOrigin = "anonymous";
+      redirectHtml.type = "text/html";
+      redirectHtml.rel = "prefetch";
+      const resolveFn = () => {
+        this.isInitialized = true;
+        resolve();
+      };
+      try {
+        if (redirectHtml.relList && redirectHtml.relList.supports) {
+          if (redirectHtml.relList.supports("prefetch")) {
+            redirectHtml.onload = resolveFn;
+            redirectHtml.onerror = () => {
+              reject(new Error(`Please serve redirect.html present in serviceworker folder of this package on ${this.config.redirect_uri}`));
+            };
+            document.head.appendChild(redirectHtml);
+          } else {
+            // Link prefetch is not supported. pass through
+            resolveFn();
+          }
+        } else {
+          // Link prefetch is not detectable. pass through
+          resolveFn();
+        }
+      } catch (err) {
+        resolveFn();
+      }
+    });
   }
 
   async triggerLogin(args: SubVerifierDetails): Promise<TorusLoginResponse> {
@@ -112,7 +151,6 @@ class DirectWebSDK {
     if (!this.isInitialized) {
       throw new Error("Not initialized yet");
     }
-    storeLoginDetails({ method: TORUS_METHOD.TRIGGER_LOGIN, args });
     const loginHandler: ILoginHandler = createHandler({
       typeOfLogin,
       clientId,
@@ -129,6 +167,7 @@ class DirectWebSDK {
       const { access_token: accessToken, id_token: idToken } = hashParameters;
       loginParams = { accessToken, idToken };
     } else {
+      storeLoginDetails({ method: TORUS_METHOD.TRIGGER_LOGIN, args }, this.config.redirectParamsStorageMethod, loginHandler.nonce);
       loginParams = await loginHandler.handleLoginWindow();
       if (this.config.uxMode === UX_MODE.REDIRECT) return null;
     }
@@ -161,7 +200,6 @@ class DirectWebSDK {
     if (aggregateVerifierType === AGGREGATE_VERIFIER.SINGLE_VERIFIER_ID && subVerifierDetailsArray.length !== 1) {
       throw new Error("Single id verifier can only have one sub verifier");
     }
-    storeLoginDetails({ method: TORUS_METHOD.TRIGGER_AGGREGATE_LOGIN, args });
     const userInfoPromises: Promise<TorusVerifierResponse>[] = [];
     const loginParamsArray: LoginWindowResponse[] = [];
     for (const subVerifierDetail of subVerifierDetailsArray) {
@@ -183,6 +221,7 @@ class DirectWebSDK {
         loginParams = { accessToken, idToken };
         // eslint-disable-next-line no-await-in-loop
       } else {
+        storeLoginDetails({ method: TORUS_METHOD.TRIGGER_AGGREGATE_LOGIN, args }, this.config.redirectParamsStorageMethod, loginHandler.nonce);
         // eslint-disable-next-line no-await-in-loop
         loginParams = await loginHandler.handleLoginWindow();
         if (this.config.uxMode === UX_MODE.REDIRECT) return null;
@@ -235,7 +274,6 @@ class DirectWebSDK {
     ) {
       throw new Error("Single id verifier can only have one sub verifier");
     }
-    storeLoginDetails({ method: TORUS_METHOD.TRIGGER_AGGREGATE_HYBRID_LOGIN, args });
     const { typeOfLogin, clientId, verifier, jwtParams, hash, queryParameters } = singleLogin;
     const loginHandler: ILoginHandler = createHandler({
       typeOfLogin,
@@ -252,6 +290,7 @@ class DirectWebSDK {
       const { access_token: accessToken, id_token: idToken } = hashParameters;
       loginParams = { accessToken, idToken };
     } else {
+      storeLoginDetails({ method: TORUS_METHOD.TRIGGER_AGGREGATE_HYBRID_LOGIN, args }, this.config.redirectParamsStorageMethod, loginHandler.nonce);
       loginParams = await loginHandler.handleLoginWindow();
       if (this.config.uxMode === UX_MODE.REDIRECT) return null;
     }
@@ -307,7 +346,6 @@ class DirectWebSDK {
   }
 
   async getRedirectResult({ replaceUrl = true }: RedirectResultParams = {}): Promise<RedirectResult> {
-    const { args, method, ...rest } = retrieveLoginDetails();
     await this.init({ skipInit: true });
     const url = new URL(window.location.href);
     const hash = url.hash.substr(1);
@@ -325,7 +363,15 @@ class DirectWebSDK {
       throw new Error("Unable to fetch result from redirect");
     }
 
+    const { instanceParameters } = handleRedirectParameters(hash, queryParams);
+
+    const { instanceId } = instanceParameters;
+
+    log.info(instanceId, "instanceId");
+
+    const { args, method, ...rest } = retrieveLoginDetails(this.config.redirectParamsStorageMethod, instanceId);
     log.info(args, method);
+    clearLoginDetailsStorage(this.config.redirectParamsStorageMethod, instanceId);
 
     let result: unknown;
 
@@ -349,8 +395,6 @@ class DirectWebSDK {
     }
 
     if (!result) throw new Error("Unsupported method type");
-
-    clearLocalStorage();
 
     return { method, result, ...rest };
   }
