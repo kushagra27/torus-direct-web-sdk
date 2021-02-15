@@ -15,16 +15,16 @@ import { triggerLogin } from "../OpenLoginSdk";
 export default {
   name: "Home",
   data() {
-    return { privKey: "" }
+    return { privKey: "" };
   },
   mounted() {
     const hash = this.$route.hash.slice(1);
     const { privKey } = hash.split("&").reduce((result, item) => {
-    const [part0, part1] = item.split("=");
-    result[part0] = part1;
-    return result;
-  }, {});
-  this.privKey = privKey
+      const [part0, part1] = item.split("=");
+      result[part0] = part1;
+      return result;
+    }, {});
+    this.privKey = privKey;
   },
   methods: {
     async login() {

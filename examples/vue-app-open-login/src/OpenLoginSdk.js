@@ -1,17 +1,25 @@
-import TorusSdk from "@toruslabs/torus-direct-web-sdk";
+// import TorusSdk from "@toruslabs/torus-direct-web-sdk";
+import OpenLogin from "@openlogin/core";
 
 const OPEN_LOGIN_URL = "http://localhost:3000";
+const CLIENT_ID = "localhost";
 
 // let openLoginIframe = null;
 
-const torusdirectsdk = new TorusSdk({
-  baseUrl: OPEN_LOGIN_URL,
-  redirectPathName: "auth",
-  enableLogging: true,
-  uxMode: "redirect",
-  network: "testnet"
+const openLogin = new OpenLogin({
+  iframeURL: OPEN_LOGIN_URL
 });
-torusdirectsdk.init({ skipInit: true });
+
+openLogin.init();
+
+// const torusdirectsdk = new TorusSdk({
+//   baseUrl: OPEN_LOGIN_URL,
+//   redirectPathName: "auth",
+//   enableLogging: true,
+//   uxMode: "redirect",
+//   network: "testnet"
+// });
+// torusdirectsdk.init({ skipInit: true });
 
 export async function triggerLogin() {
   // const args = {
@@ -23,7 +31,11 @@ export async function triggerLogin() {
   //   openLoginIframe.contentWindow.postMessage({ method: "triggerLogin", args, domain: location.origin }, OPEN_LOGIN_URL);
   // }
   // return torusdirectsdk.triggerLogin(args);
-  window.location.href = `${OPEN_LOGIN_URL}/start?provider=google`
+  // window.location.href = `${OPEN_LOGIN_URL}/start?provider=google`;
+  const a = await openLogin.request({
+    method: "openlogin_user_info"
+  });
+  console.log("this gets called", a, CLIENT_ID);
 }
 
 // export const htmlToElement = html => {
